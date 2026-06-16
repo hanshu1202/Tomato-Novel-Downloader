@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tomato MTL Novel Chapter Downloader - with login support
+Tomato MTL Novel Chapter Downloader - uses browser cookies to bypass login
 """
 
 import cloudscraper
@@ -9,6 +9,7 @@ import time
 import sys
 import os
 import re
+import json
 
 DELAY = 2.0
 OUTPUT_FOLDER = "downloaded_novels"
@@ -35,60 +36,32 @@ def normalize_url(url):
     return url
 
 
-def login(email, password):
-    """Login to TomatoMTL to unlock all chapters."""
-    if not email or not password:
-        print("⚠️  No login credentials provided — downloading as guest (max 5 chapters)")
-        return False
+def load_cookies():
+    """Load cookies from environment variable and inject into scraper."""
+    raw = os.environ.get("TOMATO_COOKIES", "")
+    if not raw:
+        print("⚠️  No cookies found — downloading as guest (limited chapters)")
+        return
 
-    print(f"\n🔐 Logging in as {email} ...")
-
-    # Visit homepage first
-    scraper.get("https://tomatomtl.com", timeout=15)
-    time.sleep(2)
-
-    # Find login page
-    login_url = "https://tomatomtl.com/login"
-    resp = scraper.get(login_url, timeout=15)
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Get CSRF token if present
-    csrf = None
-    csrf_tag = soup.find("input", {"name": re.compile(r"csrf|token|_token", re.I)})
-    if csrf_tag:
-        csrf = csrf_tag.get("value")
-
-    # Submit login form
-    payload = {
-        "email": email,
-        "password": password,
-    }
-    if csrf:
-        payload["_token"] = csrf
-
-    # Try to find the actual form action URL
-    form = soup.find("form")
-    action = login_url
-    if form and form.get("action"):
-        action = form["action"]
-        if not action.startswith("http"):
-            action = "https://tomatomtl.com" + action
-
-    resp = scraper.post(action, data=payload, timeout=15)
-    time.sleep(2)
-
-    # Check if login worked
-    if "logout" in resp.text.lower() or "profile" in resp.text.lower() or resp.url == "https://tomatomtl.com/":
-        print("✅ Login successful!")
-        return True
-    else:
-        print("⚠️  Login may have failed — check your email/password in GitHub Secrets")
-        print("   Continuing anyway...")
-        return False
+    try:
+        cookies = json.loads(raw)
+        # Cookie-Editor exports as list of dicts with "name" and "value"
+        for c in cookies:
+            scraper.cookies.set(c["name"], c["value"], domain=".tomatomtl.com")
+        print(f"✅ Loaded {len(cookies)} cookies — logged in!")
+    except Exception as e:
+        print(f"⚠️  Could not load cookies: {e}")
 
 
 def get_novel_info(novel_url):
     print(f"\n📖 Fetching novel page: {novel_url}")
+
+    # Visit homepage first to warm up
+    try:
+        scraper.get("https://tomatomtl.com", timeout=15)
+        time.sleep(2)
+    except:
+        pass
 
     resp = scraper.get(novel_url, timeout=15)
     print(f"   Status: {resp.status_code}")
@@ -150,6 +123,9 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     novel_url = normalize_url(raw_url)
 
+    # Load cookies before anything else
+    load_cookies()
+
     info = get_novel_info(novel_url)
     title = info["title"]
     chapters = info["chapters"]
@@ -202,9 +178,4 @@ if __name__ == "__main__":
     start = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     end = int(sys.argv[3]) if len(sys.argv) > 3 else None
 
-    # Get login credentials from environment variables (GitHub Secrets)
-    email = os.environ.get("TOMATO_EMAIL", "")
-    password = os.environ.get("TOMATO_PASSWORD", "")
-
-    login(email, password)
     download_novel(url, start, end)
