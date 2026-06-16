@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tomato MTL Novel Chapter Downloader - uses browser cookies to bypass login
+Tomato MTL Novel Chapter Downloader - with debug mode to fix chapter detection
 """
 
 import cloudscraper
@@ -15,11 +15,7 @@ DELAY = 2.0
 OUTPUT_FOLDER = "downloaded_novels"
 
 scraper = cloudscraper.create_scraper(
-    browser={
-        "browser": "chrome",
-        "platform": "windows",
-        "mobile": False
-    }
+    browser={"browser": "chrome", "platform": "windows", "mobile": False}
 )
 
 
@@ -37,15 +33,12 @@ def normalize_url(url):
 
 
 def load_cookies():
-    """Load cookies from environment variable and inject into scraper."""
     raw = os.environ.get("TOMATO_COOKIES", "")
     if not raw:
-        print("⚠️  No cookies found — downloading as guest (limited chapters)")
+        print("⚠️  No cookies found — downloading as guest")
         return
-
     try:
         cookies = json.loads(raw)
-        # Cookie-Editor exports as list of dicts with "name" and "value"
         for c in cookies:
             scraper.cookies.set(c["name"], c["value"], domain=".tomatomtl.com")
         print(f"✅ Loaded {len(cookies)} cookies — logged in!")
@@ -56,7 +49,6 @@ def load_cookies():
 def get_novel_info(novel_url):
     print(f"\n📖 Fetching novel page: {novel_url}")
 
-    # Visit homepage first to warm up
     try:
         scraper.get("https://tomatomtl.com", timeout=15)
         time.sleep(2)
@@ -69,26 +61,48 @@ def get_novel_info(novel_url):
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
+    # ── DEBUG: print ALL links so we can see the real pattern ──
+    print("\n🔍 DEBUG — All links found on page:")
+    all_links = soup.find_all("a", href=True)
+    print(f"   Total anchor tags: {len(all_links)}")
+    for a in all_links[:50]:
+        print(f"   HREF: {repr(a['href'])}  TEXT: {repr(a.get_text(strip=True)[:40])}")
+
+    # ── DEBUG: print all div classes ──
+    print("\n🔍 DEBUG — Div classes:")
+    for d in soup.find_all("div", class_=True)[:20]:
+        print(f"   {d.get('class')}")
+
+    # ── Title ──
     title_tag = soup.find("h1")
     title = title_tag.get_text(strip=True) if title_tag else "Unknown Novel"
-    print(f"✅ Novel: {title}")
+    print(f"\n✅ Novel title: {title}")
 
+    # ── Chapter links — try ALL possible patterns ──
     chapter_links = []
     seen = set()
     base = "https://tomatomtl.com"
 
-    for a in soup.find_all("a", href=True):
+    for a in all_links:
         href = a["href"]
         if not href.startswith("http"):
             href = base + href
-        if re.search(r"/book/\d+/\d+", href, re.I) and href not in seen:
+
+        # Match any URL that looks like a chapter
+        # Try: /book/ID/ID, /chapter/, /read/, /ch-
+        if (
+            re.search(r"/book/\d+/\d+", href, re.I) or
+            re.search(r"/chapter/\d+", href, re.I) or
+            re.search(r"/read/", href, re.I) or
+            re.search(r"/ch-\d+", href, re.I)
+        ) and href not in seen:
             seen.add(href)
             chapter_links.append({
                 "url": href,
                 "title": a.get_text(strip=True) or f"Chapter {len(chapter_links)+1}"
             })
 
-    print(f"📚 Found {len(chapter_links)} chapters total")
+    print(f"📚 Found {len(chapter_links)} chapters")
     return {"title": title, "chapters": chapter_links}
 
 
@@ -97,13 +111,21 @@ def fetch_chapter(url):
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
+    # ── DEBUG first chapter only ──
+    print(f"\n🔍 DEBUG chapter page divs:")
+    for d in soup.find_all("div", class_=True)[:15]:
+        print(f"   {d.get('class')}")
+
+    # Try many possible content containers
     content_div = (
-        soup.find("div", class_=re.compile(r"chapter.?content|novel.?content|read.?content|content.?area", re.I))
+        soup.find("div", class_=re.compile(r"chapter.?content|novel.?content|read.?content|content.?area|article.?content|passage|reader", re.I))
         or soup.find("article")
-        or soup.find("div", id=re.compile(r"content|chapter", re.I))
+        or soup.find("div", id=re.compile(r"content|chapter|reader|text", re.I))
+        or soup.find("section", class_=re.compile(r"content|chapter|read", re.I))
     )
 
     if not content_div:
+        # Grab biggest div as last resort
         divs = soup.find_all("div")
         if divs:
             content_div = max(divs, key=lambda d: len(d.get_text()))
@@ -123,15 +145,13 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     novel_url = normalize_url(raw_url)
 
-    # Load cookies before anything else
     load_cookies()
-
     info = get_novel_info(novel_url)
     title = info["title"]
     chapters = info["chapters"]
 
     if not chapters:
-        print("❌ No chapters found. Please check the URL.")
+        print("❌ No chapters found — check DEBUG output above for clues!")
         sys.exit(1)
 
     total = len(chapters)
@@ -160,13 +180,46 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
                 content = fetch_chapter(ch["url"])
                 f.write(content + "\n\n")
             except Exception as e:
-                msg = f"[Error fetching this chapter: {e}]"
+                msg = f"[Error: {e}]"
                 print(f"    ⚠️  {msg}")
                 f.write(msg + "\n\n")
+
+            # Only debug first chapter
+            global fetch_chapter
+            fetch_chapter = fetch_chapter_silent
 
             time.sleep(DELAY)
 
     print(f"\n✅ Done! Saved to: {os.path.abspath(filename)}")
+
+
+def fetch_chapter_silent(url):
+    """Same as fetch_chapter but without debug prints."""
+    resp = scraper.get(url, timeout=15)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    content_div = (
+        soup.find("div", class_=re.compile(r"chapter.?content|novel.?content|read.?content|content.?area|article.?content|passage|reader", re.I))
+        or soup.find("article")
+        or soup.find("div", id=re.compile(r"content|chapter|reader|text", re.I))
+        or soup.find("section", class_=re.compile(r"content|chapter|read", re.I))
+    )
+
+    if not content_div:
+        divs = soup.find_all("div")
+        if divs:
+            content_div = max(divs, key=lambda d: len(d.get_text()))
+        else:
+            return "[Could not extract chapter content]"
+
+    for tag in content_div.find_all(["nav", "script", "style", "button", "aside", "header", "footer"]):
+        tag.decompose()
+
+    paragraphs = content_div.find_all("p")
+    if paragraphs:
+        return "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+    return content_div.get_text(separator="\n", strip=True)
 
 
 if __name__ == "__main__":
