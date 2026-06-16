@@ -1,0 +1,35 @@
+name: Download TomatoMTL Novel
+
+on:
+  workflow_dispatch:
+    inputs:
+      novel_url:
+        description: "TomatoMTL novel URL (e.g. https://www.tomatomtl.com/novel/your-novel)"
+        required: true
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Download novel chapters
+        run: python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}"
+
+      - name: Upload novel as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-novel
+          path: downloaded_novels/
+          retention-days: 7
