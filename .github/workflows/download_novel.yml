@@ -4,8 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       novel_url:
-        description: "TomatoMTL novel URL (e.g. https://www.tomatomtl.com/novel/your-novel)"
+        description: "Paste your TomatoMTL novel URL here"
         required: true
+        type: string
+      start_chapter:
+        description: "Start from chapter number (e.g. 1)"
+        required: false
+        default: "1"
+        type: string
+      end_chapter:
+        description: "End at chapter number (e.g. 50) — leave empty for ALL chapters"
+        required: false
+        default: ""
         type: string
 
 jobs:
@@ -22,10 +32,18 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests beautifulsoup4
+        run: pip install requests beautifulsoup4 cloudscraper
 
       - name: Download novel chapters
-        run: python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}"
+        run: |
+          START="${{ github.event.inputs.start_chapter }}"
+          END="${{ github.event.inputs.end_chapter }}"
+
+          if [ -z "$END" ]; then
+            python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START"
+          else
+            python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START" "$END"
+          fi
 
       - name: Upload novel as artifact
         uses: actions/upload-artifact@v4
