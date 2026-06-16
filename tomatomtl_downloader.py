@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tomato MTL Novel Chapter Downloader - uses cloudscraper to bypass 403 blocks
+Tomato MTL Novel Chapter Downloader - with login support
 """
 
 import cloudscraper
@@ -13,7 +13,6 @@ import re
 DELAY = 2.0
 OUTPUT_FOLDER = "downloaded_novels"
 
-# cloudscraper mimics a real browser automatically
 scraper = cloudscraper.create_scraper(
     browser={
         "browser": "chrome",
@@ -36,15 +35,60 @@ def normalize_url(url):
     return url
 
 
+def login(email, password):
+    """Login to TomatoMTL to unlock all chapters."""
+    if not email or not password:
+        print("⚠️  No login credentials provided — downloading as guest (max 5 chapters)")
+        return False
+
+    print(f"\n🔐 Logging in as {email} ...")
+
+    # Visit homepage first
+    scraper.get("https://tomatomtl.com", timeout=15)
+    time.sleep(2)
+
+    # Find login page
+    login_url = "https://tomatomtl.com/login"
+    resp = scraper.get(login_url, timeout=15)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Get CSRF token if present
+    csrf = None
+    csrf_tag = soup.find("input", {"name": re.compile(r"csrf|token|_token", re.I)})
+    if csrf_tag:
+        csrf = csrf_tag.get("value")
+
+    # Submit login form
+    payload = {
+        "email": email,
+        "password": password,
+    }
+    if csrf:
+        payload["_token"] = csrf
+
+    # Try to find the actual form action URL
+    form = soup.find("form")
+    action = login_url
+    if form and form.get("action"):
+        action = form["action"]
+        if not action.startswith("http"):
+            action = "https://tomatomtl.com" + action
+
+    resp = scraper.post(action, data=payload, timeout=15)
+    time.sleep(2)
+
+    # Check if login worked
+    if "logout" in resp.text.lower() or "profile" in resp.text.lower() or resp.url == "https://tomatomtl.com/":
+        print("✅ Login successful!")
+        return True
+    else:
+        print("⚠️  Login may have failed — check your email/password in GitHub Secrets")
+        print("   Continuing anyway...")
+        return False
+
+
 def get_novel_info(novel_url):
     print(f"\n📖 Fetching novel page: {novel_url}")
-
-    # Warm up cookies by visiting homepage first
-    try:
-        scraper.get("https://tomatomtl.com", timeout=15)
-        time.sleep(2)
-    except Exception as e:
-        print(f"   (Homepage visit failed: {e}, continuing...)")
 
     resp = scraper.get(novel_url, timeout=15)
     print(f"   Status: {resp.status_code}")
@@ -151,11 +195,16 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python tomatomtl_downloader.py <url> [start_chapter] [end_chapter]")
+        print("Usage: python tomatomtl_downloader.py <url> [start] [end]")
         sys.exit(1)
 
     url = sys.argv[1]
     start = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     end = int(sys.argv[3]) if len(sys.argv) > 3 else None
 
+    # Get login credentials from environment variables (GitHub Secrets)
+    email = os.environ.get("TOMATO_EMAIL", "")
+    password = os.environ.get("TOMATO_PASSWORD", "")
+
+    login(email, password)
     download_novel(url, start, end)
