@@ -32,9 +32,12 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests beautifulsoup4 cloudscraper
+        run: pip install cloudscraper beautifulsoup4
 
       - name: Download novel chapters
+        env:
+          TOMATO_EMAIL: ${{ secrets.TOMATO_EMAIL }}
+          TOMATO_PASSWORD: ${{ secrets.TOMATO_PASSWORD }}
         run: |
           START="${{ github.event.inputs.start_chapter }}"
           END="${{ github.event.inputs.end_chapter }}"
