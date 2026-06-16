@@ -13,7 +13,7 @@ on:
         default: "1"
         type: string
       end_chapter:
-        description: "End at chapter number (e.g. 50) — leave empty for ALL chapters"
+        description: "End at chapter number (e.g. 50) — leave empty for ALL"
         required: false
         default: ""
         type: string
@@ -36,8 +36,7 @@ jobs:
 
       - name: Download novel chapters
         env:
-          TOMATO_EMAIL: ${{ secrets.TOMATO_EMAIL }}
-          TOMATO_PASSWORD: ${{ secrets.TOMATO_PASSWORD }}
+          TOMATO_COOKIES: ${{ secrets.TOMATO_COOKIES }}
         run: |
           START="${{ github.event.inputs.start_chapter }}"
           END="${{ github.event.inputs.end_chapter }}"
