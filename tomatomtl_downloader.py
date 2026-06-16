@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Tomato MTL Novel Chapter Downloader
+Tomato MTL Novel Chapter Downloader - uses cloudscraper to bypass 403 blocks
 """
 
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import time
 import sys
@@ -13,22 +13,14 @@ import re
 DELAY = 2.0
 OUTPUT_FOLDER = "downloaded_novels"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Cache-Control": "max-age=0",
-}
-
-session = requests.Session()
-session.headers.update(HEADERS)
+# cloudscraper mimics a real browser automatically
+scraper = cloudscraper.create_scraper(
+    browser={
+        "browser": "chrome",
+        "platform": "windows",
+        "mobile": False
+    }
+)
 
 
 def slugify(text):
@@ -47,14 +39,14 @@ def normalize_url(url):
 def get_novel_info(novel_url):
     print(f"\n📖 Fetching novel page: {novel_url}")
 
-    # First visit homepage to get cookies (like a real browser)
+    # Warm up cookies by visiting homepage first
     try:
-        session.get("https://tomatomtl.com", timeout=15)
-        time.sleep(1)
-    except:
-        pass
+        scraper.get("https://tomatomtl.com", timeout=15)
+        time.sleep(2)
+    except Exception as e:
+        print(f"   (Homepage visit failed: {e}, continuing...)")
 
-    resp = session.get(novel_url, timeout=15)
+    resp = scraper.get(novel_url, timeout=15)
     print(f"   Status: {resp.status_code}")
     resp.raise_for_status()
 
@@ -84,7 +76,7 @@ def get_novel_info(novel_url):
 
 
 def fetch_chapter(url):
-    resp = session.get(url, timeout=15)
+    resp = scraper.get(url, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -95,7 +87,6 @@ def fetch_chapter(url):
     )
 
     if not content_div:
-        # Last resort: grab biggest <div> by text length
         divs = soup.find_all("div")
         if divs:
             content_div = max(divs, key=lambda d: len(d.get_text()))
@@ -120,7 +111,7 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
     chapters = info["chapters"]
 
     if not chapters:
-        print("❌ No chapters found. The site may have blocked the request or changed layout.")
+        print("❌ No chapters found. Please check the URL.")
         sys.exit(1)
 
     total = len(chapters)
