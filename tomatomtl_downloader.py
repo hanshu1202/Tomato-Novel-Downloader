@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Tomato MTL Novel Chapter Downloader - with debug mode to fix chapter detection
+Tomato MTL Novel Chapter Downloader
+- Handles JS-loaded chapter lists via API
+- Uses correct 'tooi' class for chapter content
 """
 
 import cloudscraper
@@ -32,6 +34,11 @@ def normalize_url(url):
     return url
 
 
+def get_book_id(url):
+    match = re.search(r"/book/(\d+)", url)
+    return match.group(1) if match else None
+
+
 def load_cookies():
     raw = os.environ.get("TOMATO_COOKIES", "")
     if not raw:
@@ -61,61 +68,105 @@ def get_novel_info(novel_url):
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # DEBUG: print all links
-    print("\n🔍 DEBUG — All links on page:")
-    all_links = soup.find_all("a", href=True)
-    print(f"   Total links: {len(all_links)}")
-    for a in all_links[:50]:
-        print(f"   HREF: {repr(a['href'])}  TEXT: {repr(a.get_text(strip=True)[:40])}")
-
-    # DEBUG: print all div classes
-    print("\n🔍 DEBUG — Div classes:")
-    for d in soup.find_all("div", class_=True)[:20]:
-        print(f"   {d.get('class')}")
-
-    title_tag = soup.find("h1")
+    # Get title
+    title_tag = soup.find("h1") or soup.find("h2")
     title = title_tag.get_text(strip=True) if title_tag else "Unknown Novel"
-    print(f"\n✅ Novel title: {title}")
 
+    # If title still empty, try meta tag
+    if not title or title.strip() == "":
+        meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
+        if meta:
+            title = meta.get("content", "Unknown Novel")
+
+    print(f"✅ Novel title: {title}")
+
+    book_id = get_book_id(novel_url)
+    print(f"📘 Book ID: {book_id}")
+
+    # Try TomatoMTL's API to get full chapter list
     chapter_links = []
-    seen = set()
-    base = "https://tomatomtl.com"
+    
+    # Method 1: Try their chapter list API
+    api_urls = [
+        f"https://tomatomtl.com/book/{book_id}/chapters",
+        f"https://tomatomtl.com/api/book/{book_id}/chapters",
+        f"https://tomatomtl.com/api/chapters?book_id={book_id}",
+    ]
 
-    for a in all_links:
+    for api_url in api_urls:
+        try:
+            print(f"   Trying API: {api_url}")
+            r = scraper.get(api_url, timeout=15)
+            if r.status_code == 200:
+                print(f"   API response: {r.text[:300]}")
+                try:
+                    data = r.json()
+                    print(f"   JSON keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+                    break
+                except:
+                    pass
+        except Exception as e:
+            print(f"   API failed: {e}")
+
+    # Method 2: Use the one chapter link we found + increment through chapters
+    # We found: /book/7528360449612467262/7651523370248307225
+    # Try to find all chapter links including paginated ones
+    base = "https://tomatomtl.com"
+    seen = set()
+
+    # Get all chapter links from page
+    for a in soup.find_all("a", href=True):
         href = a["href"]
         if not href.startswith("http"):
             href = base + href
-        if (
-            re.search(r"/book/\d+/\d+", href, re.I) or
-            re.search(r"/chapter/\d+", href, re.I) or
-            re.search(r"/read/", href, re.I) or
-            re.search(r"/ch-\d+", href, re.I)
-        ) and href not in seen:
+        if re.search(r"/book/\d+/\d+", href, re.I) and href not in seen:
             seen.add(href)
             chapter_links.append({
                 "url": href,
                 "title": a.get_text(strip=True) or f"Chapter {len(chapter_links)+1}"
             })
 
-    print(f"📚 Found {len(chapter_links)} chapters")
+    # Method 3: Try fetching paginated chapter list pages
+    for page in range(1, 20):
+        page_url = f"{novel_url}?page={page}"
+        try:
+            r = scraper.get(page_url, timeout=15)
+            if r.status_code != 200:
+                break
+            psoup = BeautifulSoup(r.text, "html.parser")
+            found_new = False
+            for a in psoup.find_all("a", href=True):
+                href = a["href"]
+                if not href.startswith("http"):
+                    href = base + href
+                if re.search(r"/book/\d+/\d+", href, re.I) and href not in seen:
+                    seen.add(href)
+                    chapter_links.append({
+                        "url": href,
+                        "title": a.get_text(strip=True) or f"Chapter {len(chapter_links)+1}"
+                    })
+                    found_new = True
+            if not found_new:
+                break
+            time.sleep(1)
+        except:
+            break
+
+    print(f"📚 Found {len(chapter_links)} chapters total")
     return {"title": title, "chapters": chapter_links}
 
 
-def fetch_chapter(url, debug=False):
+def fetch_chapter(url):
     resp = scraper.get(url, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    if debug:
-        print(f"\n🔍 DEBUG chapter page div classes:")
-        for d in soup.find_all("div", class_=True)[:15]:
-            print(f"   {d.get('class')}")
-
+    # We know the content class is 'tooi' from debug output!
     content_div = (
-        soup.find("div", class_=re.compile(r"chapter.?content|novel.?content|read.?content|content.?area|article.?content|passage|reader", re.I))
+        soup.find("div", class_="tooi")
+        or soup.find("div", class_=re.compile(r"tooi|chapter.?content|novel.?content|read.?content", re.I))
         or soup.find("article")
         or soup.find("div", id=re.compile(r"content|chapter|reader|text", re.I))
-        or soup.find("section", class_=re.compile(r"content|chapter|read", re.I))
     )
 
     if not content_div:
@@ -140,11 +191,11 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
 
     load_cookies()
     info = get_novel_info(novel_url)
-    title = info["title"]
+    title = info["title"] or "novel"
     chapters = info["chapters"]
 
     if not chapters:
-        print("❌ No chapters found — check DEBUG output above!")
+        print("❌ No chapters found!")
         sys.exit(1)
 
     total = len(chapters)
@@ -154,12 +205,12 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
 
     print(f"\n📌 Downloading chapters {start+1} to {end} (out of {total} total)")
 
-    safe_title = slugify(title)
+    safe_title = slugify(title) or "novel"
     filename = os.path.join(OUTPUT_FOLDER, f"{safe_title}_ch{start+1}_to_{end}.txt")
     print(f"💾 Saving to: {filename}\n{'─'*50}")
 
     with open(filename, "w", encoding="utf-8") as f:
-        f.write(f"{title}\n{'='*len(title)}\n")
+        f.write(f"{title}\n{'='*max(len(title),1)}\n")
         f.write(f"Chapters: {start+1} to {end}\n")
         f.write(f"Source: {novel_url}\n\n\n")
 
@@ -170,8 +221,7 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
             f.write(f"\n{'─'*60}\n{ch_title}\n{'─'*60}\n\n")
 
             try:
-                # Only show debug info on first chapter
-                content = fetch_chapter(ch["url"], debug=(i == start+1))
+                content = fetch_chapter(ch["url"])
                 f.write(content + "\n\n")
             except Exception as e:
                 msg = f"[Error: {e}]"
