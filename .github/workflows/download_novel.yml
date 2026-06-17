@@ -31,8 +31,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install cloudscraper beautifulsoup4
+      - name: Install Chrome
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y google-chrome-stable
+          google-chrome --version
+
+      - name: Install Python dependencies
+        run: pip install cloudscraper beautifulsoup4 selenium webdriver-manager
 
       - name: Download novel chapters
         env:
@@ -40,7 +46,6 @@ jobs:
         run: |
           START="${{ github.event.inputs.start_chapter }}"
           END="${{ github.event.inputs.end_chapter }}"
-
           if [ -z "$END" ]; then
             python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START"
           else
