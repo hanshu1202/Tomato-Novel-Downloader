@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """
 Tomato MTL Novel Chapter Downloader
-- Uses Selenium to expand chapter groups and collect all links
-- Uses cookies for login so content is accessible
+- Handles JS-loaded chapter lists via API
+- Uses correct 'tooi' class for chapter content
 """
 
 import cloudscraper
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import time
 import sys
 import os
@@ -39,151 +34,139 @@ def normalize_url(url):
     return url
 
 
+def get_book_id(url):
+    match = re.search(r"/book/(\d+)", url)
+    return match.group(1) if match else None
+
+
 def load_cookies():
     raw = os.environ.get("TOMATO_COOKIES", "")
     if not raw:
-        print("⚠️  No cookies — will get Login Required error!")
-        return []
+        print("⚠️  No cookies found — downloading as guest")
+        return
     try:
         cookies = json.loads(raw)
-        # Also load into cloudscraper
         for c in cookies:
             scraper.cookies.set(c["name"], c["value"], domain=".tomatomtl.com")
-        print(f"✅ Loaded {len(cookies)} cookies!")
-        return cookies
+        print(f"✅ Loaded {len(cookies)} cookies — logged in!")
     except Exception as e:
-        print(f"⚠️  Cookie error: {e}")
-        return []
+        print(f"⚠️  Could not load cookies: {e}")
 
 
-def get_driver():
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
-    from selenium.webdriver.chrome.service import Service
-    from webdriver_manager.chrome import ChromeDriverManager
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-
-
-def get_all_chapters(novel_url, cookies):
-    """Use Selenium to expand all chapter groups and collect links."""
-    print(f"\n🌐 Opening novel page in browser...")
-    driver = get_driver()
-    chapter_links = []
-    title = "Unknown Novel"
+def get_novel_info(novel_url):
+    print(f"\n📖 Fetching novel page: {novel_url}")
 
     try:
-        # Visit homepage first and inject cookies
-        driver.get("https://tomatomtl.com")
+        scraper.get("https://tomatomtl.com", timeout=15)
         time.sleep(2)
-        for c in cookies:
-            try:
-                driver.add_cookie({
-                    "name": c["name"],
-                    "value": c["value"],
-                    "domain": ".tomatomtl.com"
-                })
-            except:
-                pass
+    except:
+        pass
 
-        # Go to novel page
-        driver.get(novel_url)
-        time.sleep(4)
+    resp = scraper.get(novel_url, timeout=15)
+    print(f"   Status: {resp.status_code}")
+    resp.raise_for_status()
 
-        # Get title
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Get title
+    title_tag = soup.find("h1") or soup.find("h2")
+    title = title_tag.get_text(strip=True) if title_tag else "Unknown Novel"
+
+    # If title still empty, try meta tag
+    if not title or title.strip() == "":
+        meta = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "title"})
+        if meta:
+            title = meta.get("content", "Unknown Novel")
+
+    print(f"✅ Novel title: {title}")
+
+    book_id = get_book_id(novel_url)
+    print(f"📘 Book ID: {book_id}")
+
+    # Try TomatoMTL's API to get full chapter list
+    chapter_links = []
+    
+    # Method 1: Try their chapter list API
+    api_urls = [
+        f"https://tomatomtl.com/book/{book_id}/chapters",
+        f"https://tomatomtl.com/api/book/{book_id}/chapters",
+        f"https://tomatomtl.com/api/chapters?book_id={book_id}",
+    ]
+
+    for api_url in api_urls:
         try:
-            title = driver.find_element(By.TAG_NAME, "h1").text.strip()
-            print(f"✅ Novel: {title}")
-        except:
-            print("⚠️  Could not get title")
-
-        # Scroll down to chapter list section
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-        time.sleep(2)
-
-        # Find all chapter group buttons (e.g. "Chapter 1 - 50", "Chapter 51 - 100")
-        # These are the collapsible accordion buttons
-        wait = WebDriverWait(driver, 10)
-
-        # Try to find and click all chapter group headers to expand them
-        group_selectors = [
-            "//div[contains(text(), 'Chapter') and contains(text(), '-')]",
-            "//button[contains(text(), 'Chapter')]",
-            "//*[contains(@class, 'chapter-group') or contains(@class, 'chapter-accordion')]",
-            "//*[contains(@class, 'collapse') or contains(@class, 'accordion')]//button",
-        ]
-
-        groups_clicked = 0
-        for selector in group_selectors:
-            try:
-                groups = driver.find_elements(By.XPATH, selector)
-                if groups:
-                    print(f"   Found {len(groups)} chapter groups with selector: {selector}")
-                    for g in groups:
-                        try:
-                            driver.execute_script("arguments[0].click();", g)
-                            time.sleep(0.5)
-                            groups_clicked += 1
-                        except:
-                            pass
+            print(f"   Trying API: {api_url}")
+            r = scraper.get(api_url, timeout=15)
+            if r.status_code == 200:
+                print(f"   API response: {r.text[:300]}")
+                try:
+                    data = r.json()
+                    print(f"   JSON keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
                     break
-            except:
-                pass
+                except:
+                    pass
+        except Exception as e:
+            print(f"   API failed: {e}")
 
-        print(f"   Clicked {groups_clicked} chapter group(s)")
-        time.sleep(2)
+    # Method 2: Use the one chapter link we found + increment through chapters
+    # We found: /book/7528360449612467262/7651523370248307225
+    # Try to find all chapter links including paginated ones
+    base = "https://tomatomtl.com"
+    seen = set()
 
-        # Scroll through page to trigger any lazy loading
-        for scroll in range(5):
-            driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight * {(scroll+1)/5});")
+    # Get all chapter links from page
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if not href.startswith("http"):
+            href = base + href
+        if re.search(r"/book/\d+/\d+", href, re.I) and href not in seen:
+            seen.add(href)
+            chapter_links.append({
+                "url": href,
+                "title": a.get_text(strip=True) or f"Chapter {len(chapter_links)+1}"
+            })
+
+    # Method 3: Try fetching paginated chapter list pages
+    for page in range(1, 20):
+        page_url = f"{novel_url}?page={page}"
+        try:
+            r = scraper.get(page_url, timeout=15)
+            if r.status_code != 200:
+                break
+            psoup = BeautifulSoup(r.text, "html.parser")
+            found_new = False
+            for a in psoup.find_all("a", href=True):
+                href = a["href"]
+                if not href.startswith("http"):
+                    href = base + href
+                if re.search(r"/book/\d+/\d+", href, re.I) and href not in seen:
+                    seen.add(href)
+                    chapter_links.append({
+                        "url": href,
+                        "title": a.get_text(strip=True) or f"Chapter {len(chapter_links)+1}"
+                    })
+                    found_new = True
+            if not found_new:
+                break
             time.sleep(1)
+        except:
+            break
 
-        # Now collect all chapter links
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        seen = set()
-        base = "https://tomatomtl.com"
-
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if not href.startswith("http"):
-                href = base + href
-            if re.search(r"/book/\d+/\d+", href, re.I) and href not in seen:
-                seen.add(href)
-                chapter_links.append({
-                    "url": href,
-                    "title": a.get_text(strip=True) or f"Chapter {len(chapter_links)+1}"
-                })
-
-        print(f"📚 Found {len(chapter_links)} chapters!")
-        if chapter_links:
-            print("   First 3:", [c["title"] for c in chapter_links[:3]])
-
-    finally:
-        driver.quit()
-
-    return title, chapter_links
+    print(f"📚 Found {len(chapter_links)} chapters total")
+    return {"title": title, "chapters": chapter_links}
 
 
 def fetch_chapter(url):
-    """Download chapter content using cloudscraper (with cookies already loaded)."""
     resp = scraper.get(url, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Check for login wall
-    if "login required" in resp.text.lower() or "log in to read" in resp.text.lower():
-        return "[LOGIN REQUIRED — cookies may have expired, please refresh them]"
-
-    # Content is in div class="tooi" (confirmed from previous debug)
+    # We know the content class is 'tooi' from debug output!
     content_div = (
         soup.find("div", class_="tooi")
-        or soup.find("div", class_=re.compile(r"tooi|chapter.?content|novel.?content", re.I))
+        or soup.find("div", class_=re.compile(r"tooi|chapter.?content|novel.?content|read.?content", re.I))
         or soup.find("article")
-        or soup.find("div", id=re.compile(r"content|chapter|reader", re.I))
+        or soup.find("div", id=re.compile(r"content|chapter|reader|text", re.I))
     )
 
     if not content_div:
@@ -191,7 +174,7 @@ def fetch_chapter(url):
         if divs:
             content_div = max(divs, key=lambda d: len(d.get_text()))
         else:
-            return "[Could not extract content]"
+            return "[Could not extract chapter content]"
 
     for tag in content_div.find_all(["nav", "script", "style", "button", "aside", "header", "footer"]):
         tag.decompose()
@@ -206,8 +189,10 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     novel_url = normalize_url(raw_url)
 
-    cookies = load_cookies()
-    title, chapters = get_all_chapters(novel_url, cookies)
+    load_cookies()
+    info = get_novel_info(novel_url)
+    title = info["title"] or "novel"
+    chapters = info["chapters"]
 
     if not chapters:
         print("❌ No chapters found!")
@@ -232,6 +217,7 @@ def download_novel(raw_url, start_chapter=1, end_chapter=None):
         for i, ch in enumerate(selected, start+1):
             ch_title = ch["title"] or f"Chapter {i}"
             print(f"  [{i}/{end}] {ch_title}")
+
             f.write(f"\n{'─'*60}\n{ch_title}\n{'─'*60}\n\n")
 
             try:
