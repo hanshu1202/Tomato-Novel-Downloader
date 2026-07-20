@@ -1,3 +1,4 @@
+
 name: Download TomatoMTL Novel
 
 on:
@@ -31,14 +32,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Chrome
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y google-chrome-stable
-          google-chrome --version
-
-      - name: Install Python dependencies
-        run: pip install cloudscraper beautifulsoup4 selenium webdriver-manager
+      - name: Install dependencies
+        run: pip install cloudscraper beautifulsoup4
 
       - name: Download novel chapters
         env:
@@ -51,7 +46,6 @@ jobs:
           else
             python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START" "$END"
           fi
-
       - name: Upload novel as artifact
         uses: actions/upload-artifact@v4
         with:
