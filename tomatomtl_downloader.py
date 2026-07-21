@@ -2,7 +2,7 @@
 """
 Tomato MTL Novel Chapter Downloader
 - Handles JS-loaded chapter lists via API
-- Uses correct 'tooi' class for chapter content
+- Uses correct selectors for chapter content extraction
 """
 
 import cloudscraper
@@ -161,27 +161,40 @@ def fetch_chapter(url):
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # We know the content class is 'tooi' from debug output!
-    content_div = (
-        soup.find("div", class_="tooi")
-        or soup.find("div", class_=re.compile(r"tooi|chapter.?content|novel.?content|read.?content", re.I))
-        or soup.find("article")
-        or soup.find("div", id=re.compile(r"content|chapter|reader|text", re.I))
-    )
+    # Find the chapter content container using the correct ID
+    content_div = soup.find("article", id="chapter_content") or soup.find("div", id="chapter_content")
 
     if not content_div:
+        # Fallback to finding the largest text container
         divs = soup.find_all("div")
         if divs:
             content_div = max(divs, key=lambda d: len(d.get_text()))
         else:
             return "[Could not extract chapter content]"
 
+    # Remove unwanted elements
     for tag in content_div.find_all(["nav", "script", "style", "button", "aside", "header", "footer"]):
         tag.decompose()
 
-    paragraphs = content_div.find_all("p")
+    # Extract text from span.kxa (translation spans) first
+    paragraphs = []
+    for span in content_div.find_all("span", class_="kxa"):
+        # Prefer translation (English) over original text
+        text = span.get("transtext") or span.get("orgtext") or span.get_text(strip=True)
+        if text and text.strip():
+            paragraphs.append(text.strip())
+
+    # If no span.kxa found, try regular paragraphs
+    if not paragraphs:
+        paragraphs = content_div.find_all("p")
+        if paragraphs:
+            return "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+
+    # Join collected text with proper spacing
     if paragraphs:
-        return "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+        return "\n\n".join(paragraphs)
+
+    # Final fallback: get all text from container
     return content_div.get_text(separator="\n", strip=True)
 
 
