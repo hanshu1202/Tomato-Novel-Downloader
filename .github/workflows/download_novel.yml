@@ -1,27 +1,15 @@
-name: Download TomatoMTL Novel
-
+name: Browser Debugging Session
 on:
   workflow_dispatch:
     inputs:
-      novel_url:
-        description: "Paste your TomatoMTL novel URL here"
+      target_url:
+        description: "URL to debug"
         required: true
-        type: string
-      start_chapter:
-        description: "Start from chapter number (e.g. 1)"
-        required: false
-        default: "1"
-        type: string
-      end_chapter:
-        description: "End at chapter number (e.g. 50) — leave empty for ALL"
-        required: false
-        default: ""
-        type: string
+        default: "https://example.com"
 
 jobs:
-  download:
+  debug:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -33,25 +21,20 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright beautifulsoup4
+          pip install playwright
           playwright install chromium
 
-      - name: Download novel chapters
+      - name: Run Debug Script
         env:
-          TOMATO_COOKIES: ${{ secrets.TOMATO_COOKIES }}
+          TARGET_URL: ${{ github.event.inputs.target_url }}
         run: |
-          START="${{ github.event.inputs.start_chapter }}"
-          END="${{ github.event.inputs.end_chapter }}"
+          python debug_browser.py
 
-          if [ -z "$END" ]; then
-            python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START"
-          else
-            python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START" "$END"
-          fi
-
-      - name: Upload novel as artifact
+      - name: Upload Debug Artifacts
         uses: actions/upload-artifact@v4
+        if: always() 
         with:
-          name: downloaded-novel
-          path: downloaded_novels/
-          retention-days: 7
+          name: browser-debug-results
+          path: |
+            debug_screenshots/
+            debug_logs/
