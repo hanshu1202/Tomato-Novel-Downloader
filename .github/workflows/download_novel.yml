@@ -1,20 +1,22 @@
 name: Download TomatoMTL Novel
-on: workflow_dispatch:
-  inputs:
-    novel_url:
-      description: "Paste your TomatoMTL novel URL here"
-      required: true
-      type: string
-    start_chapter:
-      description: "Start from chapter number (e.g. 1)"
-      required: false
-      default: "1"
-      type: string
-    end_chapter:
-      description: "End at chapter number (e.g. 50) — leave empty for ALL"
-      required: false
-      default: ""
-      type: string
+
+on:
+  workflow_dispatch:
+    inputs:
+      novel_url:
+        description: "Paste your TomatoMTL novel URL here"
+        required: true
+        type: string
+      start_chapter:
+        description: "Start from chapter number (e.g. 1)"
+        required: false
+        default: "1"
+        type: string
+      end_chapter:
+        description: "End at chapter number (e.g. 50) — leave empty for ALL"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   download:
