@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio 
 from playwright.async_api import async_playwright 
+from playwright_stealth import stealth_async # Added stealth
 from bs4 import BeautifulSoup 
 import time 
 import sys 
@@ -10,7 +11,7 @@ import json
 
 DELAY = 3.0 
 OUTPUT_FOLDER = "downloaded_novels"
-VIDEO_FOLDER = "recordings" # New folder for videos
+VIDEO_FOLDER = "recordings"
 
 def slugify(text): 
     text = re.sub(r"[^\w\s-]", "", text).strip().lower() 
@@ -26,22 +27,39 @@ def get_book_id(url):
     match = re.search(r"/book/(\d+)", url) 
     return match.group(1) if match else None
 
+async def setup_context(browser):
+    """Helper to create a stealthy context with cookies"""
+    context = await browser.new_context(
+        record_video_dir=VIDEO_FOLDER,
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    )
+    
+    # ACTUAL COOKIE INJECTION
+    cookies_secret = os.environ.get("TOMATO_COOKIES")
+    if cookies_secret:
+        try:
+            # Try to parse as JSON list first
+            cookies = json.loads(cookies_secret)
+            await context.add_cookies(cookies)
+            print("✅ Successfully injected cookies from secrets")
+        except json.JSONDecodeError:
+            print("⚠️ TOMATO_COOKIES secret is not valid JSON. Skipping injection.")
+            
+    return context
+
 async def get_novel_info(browser, novel_url):
     print(f"\n📖 Fetching novel page: {novel_url}")
-    # Create context with video recording enabled
-    context = await browser.new_context(record_video_dir=VIDEO_FOLDER)
+    context = await setup_context(browser)
     page = await context.new_page()
+    await stealth_async(page) # Apply stealth
 
     try:
-        await page.goto(novel_url, wait_until="networkidle", timeout=30000)
-        print(f"   ✅ Page loaded")
+        await page.goto(novel_url, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(5) # Give Cloudflare a moment to settle
         
         title = await page.locator("h1, h2").first.text_content()
         title = (title or "Unknown Novel").strip()
         print(f"✅ Novel title: {title}")
-        
-        book_id = get_book_id(novel_url)
-        print(f"📘 Book ID: {book_id}")
         
         chapter_links = []
         base = "https://tomatomtl.com"
@@ -62,7 +80,7 @@ async def get_novel_info(browser, novel_url):
                     })
         
         print(f"📚 Found {len(chapter_links)} chapters total")
-        await context.close() # This saves the video file
+        await context.close()
         return {"title": title, "chapters": chapter_links}
         
     except Exception as e:
@@ -71,17 +89,18 @@ async def get_novel_info(browser, novel_url):
         return {"title": "Unknown", "chapters": []}
 
 async def fetch_chapter(browser, url):
-    # Record each chapter page separately
-    context = await browser.new_context(record_video_dir=VIDEO_FOLDER)
+    context = await setup_context(browser)
     page = await context.new_page()
+    await stealth_async(page)
 
     try:
-        await page.goto(url, wait_until="networkidle", timeout=30000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)
         
         try:
-            await page.wait_for_selector("#chapter_content span.kxa", timeout=10000)
+            await page.wait_for_selector("#chapter_content span.kxa", timeout=15000)
         except:
-            print("    ⚠️  Timeout waiting for content to render")
+            print("    ⚠️  Timeout waiting for content. Cloudflare might still be blocking.")
         
         content = await page.evaluate("""() => {
             const article = document.querySelector('#chapter_content');
@@ -98,7 +117,7 @@ async def fetch_chapter(browser, url):
             return texts.join('\\n\\n');
         }""")
         
-        await context.close() # This saves the video file
+        await context.close()
         return content if content.strip() else "[Could not extract chapter content]"
         
     except Exception as e:
@@ -108,11 +127,10 @@ async def fetch_chapter(browser, url):
 
 async def download_novel(raw_url, start_chapter=1, end_chapter=None):
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    os.makedirs(VIDEO_FOLDER, exist_ok=True) # Ensure video folder exists
+    os.makedirs(VIDEO_FOLDER, exist_ok=True)
     novel_url = normalize_url(raw_url)
 
     async with async_playwright() as p:
-        # Headless=False doesn't work on GH Actions, but the recording does
         browser = await p.chromium.launch(headless=True) 
         
         try:
@@ -121,7 +139,7 @@ async def download_novel(raw_url, start_chapter=1, end_chapter=None):
             chapters = info["chapters"]
             
             if not chapters:
-                print("❌ No chapters found!")
+                print("❌ No chapters found! Check your cookies or the URL.")
                 return
             
             total = len(chapters)
@@ -129,31 +147,24 @@ async def download_novel(raw_url, start_chapter=1, end_chapter=None):
             end = min(end_chapter, total) if end_chapter else total
             selected = chapters[start:end]
             
-            print(f"\n📌 Downloading chapters {start+1} to {end} (out of {total} total)")
-            
             safe_title = slugify(title) or "novel"
             filename = os.path.join(OUTPUT_FOLDER, f"{safe_title}_ch{start+1}_to_{end}.txt")
             
             with open(filename, "w", encoding="utf-8") as f:
-                f.write(f"{title}\n{'='*max(len(title),1)}\n")
-                f.write(f"Chapters: {start+1} to {end}\n")
-                f.write(f"Source: {novel_url}\n\n\n")
-                
+                f.write(f"{title}\n{'='*max(len(title),1)}\n\n")
                 for i, ch in enumerate(selected, start+1):
-                    ch_title = ch["title"] or f"Chapter {i}"
-                    print(f"  [{i}/{end}] {ch_title}")
-                    f.write(f"\n{'─'*60}\n{ch_title}\n{'─'*60}\n\n")
+                    print(f"  [{i}/{end}] {ch['title']}")
+                    f.write(f"\n{'─'*60}\n{ch['title']}\n{'─'*60}\n\n")
                     content = await fetch_chapter(browser, ch["url"])
                     f.write(content + "\n\n")
                     await asyncio.sleep(DELAY)
             
-            print(f"\n✅ Done! Saved to: {os.path.abspath(filename)}")
+            print(f"\n✅ Done! Saved to: {filename}")
         finally:
             await browser.close()
 
 async def main():
     if len(sys.argv) < 2:
-        print("Usage: python tomatomtl_downloader.py <url> [start] [end]")
         sys.exit(1)
     url = sys.argv[1]
     start = int(sys.argv[2]) if len(sys.argv) > 2 else 1
