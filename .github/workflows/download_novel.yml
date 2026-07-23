@@ -1,5 +1,4 @@
 name: Download TomatoMTL Novel
-
 on:
   workflow_dispatch:
     inputs:
@@ -32,7 +31,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright beautifulsoup4
+          pip install playwright beautifulsoup4 playwright-stealth
           playwright install chromium
 
       - name: Download novel chapters
