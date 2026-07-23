@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import asyncio 
 from playwright.async_api import async_playwright 
-from playwright_stealth import stealth # Fixed import
+from playwright_stealth import stealth 
 from bs4 import BeautifulSoup 
 import time 
 import sys 
@@ -28,7 +28,7 @@ def get_book_id(url):
     return match.group(1) if match else None
 
 async def setup_context(browser):
-    """Helper to create a stealthy context with cookies"""
+    """Helper to create a stealthy context with cleaned cookies"""
     context = await browser.new_context(
         record_video_dir=VIDEO_FOLDER,
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -38,10 +38,25 @@ async def setup_context(browser):
     if cookies_secret:
         try:
             cookies = json.loads(cookies_secret)
-            await context.add_cookies(cookies)
-            print("✅ Successfully injected cookies from secrets")
+            
+            # --- COOKIE CLEANING LOGIC START ---
+            valid_samesite = {"Strict", "Lax", "None"}
+            cleaned_cookies = []
+            
+            for cookie in cookies:
+                # If sameSite is present but invalid, change it to 'Lax'
+                if "sameSite" in cookie and cookie["sameSite"] not in valid_samesite:
+                    cookie["sameSite"] = "Lax"
+                cleaned_cookies.append(cookie)
+            
+            await context.add_cookies(cleaned_cookies)
+            print("✅ Successfully cleaned and injected cookies from secrets")
+            # --- COOKIE CLEANING LOGIC END ---
+            
         except json.JSONDecodeError:
             print("⚠️ TOMATO_COOKIES secret is not valid JSON. Skipping injection.")
+        except Exception as e:
+            print(f"❌ Failed to inject cookies: {e}")
             
     return context
 
@@ -49,7 +64,7 @@ async def get_novel_info(browser, novel_url):
     print(f"\n📖 Fetching novel page: {novel_url}")
     context = await setup_context(browser)
     page = await context.new_page()
-    await stealth(page) # Fixed: use stealth() instead of stealth_async()
+    await stealth(page)
 
     try:
         await page.goto(novel_url, wait_until="domcontentloaded", timeout=60000)
@@ -89,7 +104,7 @@ async def get_novel_info(browser, novel_url):
 async def fetch_chapter(browser, url):
     context = await setup_context(browser)
     page = await context.new_page()
-    await stealth(page) # Fixed: use stealth()
+    await stealth(page)
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
