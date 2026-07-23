@@ -1,14 +1,23 @@
-name: Browser Debugging Session
-on:
-  workflow_dispatch:
-    inputs:
-      target_url:
-        description: "URL to debug"
-        required: true
-        default: "https://example.com"
+name: Download TomatoMTL Novel
+on: workflow_dispatch:
+  inputs:
+    novel_url:
+      description: "Paste your TomatoMTL novel URL here"
+      required: true
+      type: string
+    start_chapter:
+      description: "Start from chapter number (e.g. 1)"
+      required: false
+      default: "1"
+      type: string
+    end_chapter:
+      description: "End at chapter number (e.g. 50) — leave empty for ALL"
+      required: false
+      default: ""
+      type: string
 
 jobs:
-  debug:
+  download:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -21,20 +30,31 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright
+          pip install playwright beautifulsoup4
           playwright install chromium
 
-      - name: Run Debug Script
+      - name: Download novel chapters
         env:
-          TARGET_URL: ${{ github.event.inputs.target_url }}
+          TOMATO_COOKIES: ${{ secrets.TOMATO_COOKIES }}
         run: |
-          python debug_browser.py
+          START="${{ github.event.inputs.start_chapter }}"
+          END="${{ github.event.inputs.end_chapter }}"
+          if [ -z "$END" ]; then
+            python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START"
+          else
+            python tomatomtl_downloader.py "${{ github.event.inputs.novel_url }}" "$START" "$END"
+          fi
 
-      - name: Upload Debug Artifacts
+      - name: Upload novel as artifact
         uses: actions/upload-artifact@v4
-        if: always() 
         with:
-          name: browser-debug-results
-          path: |
-            debug_screenshots/
-            debug_logs/
+          name: downloaded-novel
+          path: downloaded_novels/
+          retention-days: 7
+
+      - name: Upload recordings as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-recordings
+          path: recordings/
+          retention-days: 7
