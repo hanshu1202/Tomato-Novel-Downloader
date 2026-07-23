@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import asyncio 
 from playwright.async_api import async_playwright 
-from playwright_stealth import stealth_async # Added stealth
+from playwright_stealth import stealth # Fixed import
 from bs4 import BeautifulSoup 
 import time 
 import sys 
@@ -34,11 +34,9 @@ async def setup_context(browser):
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     )
     
-    # ACTUAL COOKIE INJECTION
     cookies_secret = os.environ.get("TOMATO_COOKIES")
     if cookies_secret:
         try:
-            # Try to parse as JSON list first
             cookies = json.loads(cookies_secret)
             await context.add_cookies(cookies)
             print("✅ Successfully injected cookies from secrets")
@@ -51,11 +49,11 @@ async def get_novel_info(browser, novel_url):
     print(f"\n📖 Fetching novel page: {novel_url}")
     context = await setup_context(browser)
     page = await context.new_page()
-    await stealth_async(page) # Apply stealth
+    await stealth(page) # Fixed: use stealth() instead of stealth_async()
 
     try:
         await page.goto(novel_url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(5) # Give Cloudflare a moment to settle
+        await asyncio.sleep(5) 
         
         title = await page.locator("h1, h2").first.text_content()
         title = (title or "Unknown Novel").strip()
@@ -91,7 +89,7 @@ async def get_novel_info(browser, novel_url):
 async def fetch_chapter(browser, url):
     context = await setup_context(browser)
     page = await context.new_page()
-    await stealth_async(page)
+    await stealth(page) # Fixed: use stealth()
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
